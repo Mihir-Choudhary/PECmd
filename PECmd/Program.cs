@@ -1422,8 +1422,12 @@ internal class Program
             return;
         }
 
+        var scanned = 0;
+        var foundBefore = _processedFiles.Count;
+
         foreach (var file in allFiles)
         {
+            scanned += 1;
             try
             {
                 ScanFileForAds(file, q);
@@ -1433,6 +1437,9 @@ internal class Program
                 Log.Debug(e,"Error scanning alternate data streams for {File}. Error: {Message}",file,e.Message);
             }
         }
+
+        Log.Information("Checked {Scanned:N0} files in {Dir}; found {Found:N0} prefetch file(s) hidden in alternate data streams",scanned,scanName,_processedFiles.Count - foundBefore);
+        Console.WriteLine();
     }
 
     private static void ScanFileForAds(string file, bool q)
