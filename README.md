@@ -23,6 +23,7 @@
      
              vss             Process all Volume Shadow Copies that exist on drive specified by -f or -d . Default is FALSE
              dedupe          Deduplicate -f or -d & VSCs based on SHA-1. First file found wins. Default is TRUE
+             ads             Scan alternate data streams of every file under -d (or the -f file) and parse any prefetch data hidden in them. Default is FALSE
 
              debug           Show debug information during processing
              trace           Show trace information during processing

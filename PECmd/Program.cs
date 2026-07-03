@@ -168,8 +168,14 @@ internal class Program
             Description = "Deduplicate -f or -d & VSCs based on SHA-1. First file found wins",
             DefaultValueFactory = _ => false
         };
-        
-        
+
+        var adsOpt = new Option<bool>("--ads")
+        {
+            Description = "Scan alternate data streams of every file under -d (or the -f file) and parse any prefetch data found hidden in them",
+            DefaultValueFactory = _ => false
+        };
+
+
         var debugOpt = new Option<bool>("--debug")
         {
             Description = "Show debug information during processing",
@@ -197,16 +203,17 @@ internal class Program
           mpOpt,
           vssOpt,
           dedupeOpt,
+          adsOpt,
           debugOpt,
           traceOpt
-          
+
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
 
         _rootCommand.SetAction(result => DoWork(result.GetValue(fOpt), result.GetValue(dOpt), result.GetValue(kOpt),
             result.GetValue(oOpt), result.GetValue(qOpt), result.GetValue(jsonOpt), result.GetValue(jsonfOpt),
-            result.GetValue(csvOpt),result.GetValue(csvfOpt),result.GetValue(htmlOpt),result.GetValue(dtOpt),result.GetValue(mpOpt),result.GetValue(vssOpt),result.GetValue(dedupeOpt),result.GetValue(debugOpt),result.GetValue(traceOpt)));
+            result.GetValue(csvOpt),result.GetValue(csvfOpt),result.GetValue(htmlOpt),result.GetValue(dtOpt),result.GetValue(mpOpt),result.GetValue(vssOpt),result.GetValue(dedupeOpt),result.GetValue(adsOpt),result.GetValue(debugOpt),result.GetValue(traceOpt)));
 
         var foo = _rootCommand.Parse(args).InvokeAsync();
         
@@ -214,7 +221,7 @@ internal class Program
     }
 
 
-    private static void DoWork(string f, string d, string k, string o, bool q, string json, string jsonf, string csv, string csvf, string html, string dt, bool mp, bool vss, bool dedupe, bool debug, bool trace)
+    private static void DoWork(string f, string d, string k, string o, bool q, string json, string jsonf, string csv, string csvf, string html, string dt, bool mp, bool vss, bool dedupe, bool ads, bool debug, bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
 
@@ -392,6 +399,28 @@ internal class Program
                             if (pf != null)
                             {
                                 _processedFiles.Add(pf);
+                            }
+                        }
+                    }
+                }
+
+                if (ads)
+                {
+                    ScanFileForAds(f, q);
+
+                    if (vss)
+                    {
+                        var vssDirs = Directory.GetDirectories(VssDir);
+
+                        var root = Path.GetPathRoot(Path.GetFullPath(f));
+                        var stem = Path.GetFullPath(f).Replace(root, "");
+
+                        foreach (var vssDir in vssDirs)
+                        {
+                            var newPath = Path.Combine(vssDir, stem);
+                            if (File.Exists(newPath))
+                            {
+                                ScanFileForAds(newPath, q);
                             }
                         }
                     }
@@ -629,6 +658,27 @@ internal class Program
                 foreach (var failedFile in _failedFiles)
                 {
                     Log.Information("  {FailedFile}",failedFile);
+                }
+            }
+
+            if (ads)
+            {
+                Console.WriteLine();
+                ScanDirectoryForAds(d, q);
+
+                if (vss && Directory.Exists(VssDir))
+                {
+                    foreach (var vssDir in Directory.GetDirectories(VssDir))
+                    {
+                        var root = Path.GetPathRoot(Path.GetFullPath(d));
+                        var stem = Path.GetFullPath(d).Replace(root, "");
+                        var target = Path.Combine(vssDir, stem);
+
+                        if (Directory.Exists(target))
+                        {
+                            ScanDirectoryForAds(target, q);
+                        }
+                    }
                 }
             }
         }
@@ -1336,7 +1386,143 @@ internal class Program
         return null;
     }
 
-  
+    private static void ScanDirectoryForAds(string dir, bool q)
+    {
+        var scanName = dir;
+        if (dir.StartsWith(VssDir))
+        {
+            scanName = $"VSS{dir.Replace($"{VssDir}\\", "")}";
+        }
+
+        Log.Information("Scanning alternate data streams of all files in {Dir} for embedded prefetch data...",scanName);
+        Console.WriteLine();
+
+        IEnumerable<string> allFiles;
+
+        try
+        {
+            allFiles = EnumerateAllFiles(dir);
+        }
+        catch (Exception e)
+        {
+            Log.Error(e,"Unable to enumerate files in {Dir} for alternate data stream scanning. Error: {Message}",scanName,e.Message);
+            return;
+        }
+
+        foreach (var file in allFiles)
+        {
+            try
+            {
+                ScanFileForAds(file, q);
+            }
+            catch (Exception e)
+            {
+                Log.Debug(e,"Error scanning alternate data streams for {File}. Error: {Message}",file,e.Message);
+            }
+        }
+    }
+
+    private static void ScanFileForAds(string file, bool q)
+    {
+        foreach (var (streamFullPath, streamName) in GetAlternateDataStreams(file))
+        {
+            var sourceName = $"{file}:{streamName}";
+
+            //May already be processed by the built-in .pf ADS handling. Skip to avoid duplicate output
+            if (_processedFiles.Any(p =>
+                    string.Equals(p.SourceFilename, sourceName, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            Stream s;
+
+            try
+            {
+                s = OpenAdsStream(streamFullPath);
+            }
+            catch (Exception e)
+            {
+                Log.Warning(e,"Unable to open alternate data stream {SourceName}. Error: {Message}",sourceName,e.Message);
+                continue;
+            }
+
+            using (s)
+            {
+                IPrefetch pf;
+
+                try
+                {
+                    pf = PrefetchFile.Open(s, sourceName);
+                }
+                catch (Exception e)
+                {
+                    //The stream is not a prefetch file. This is expected for the vast majority of streams
+                    //(Zone.Identifier and similar), so keep it quiet unless debugging
+                    Log.Debug(e,"Alternate data stream {SourceName} is not a prefetch file. Error: {Message}",sourceName,e.Message);
+                    continue;
+                }
+
+                Log.Information("Found prefetch data in alternate data stream: {SourceName}",sourceName);
+                Console.WriteLine();
+
+                if (q == false)
+                {
+                    DisplayFile(pf, q, ActiveDateTimeFormat);
+                }
+
+                _processedFiles.Add(pf);
+            }
+        }
+    }
+
+    private static List<(string fullPath, string name)> GetAlternateDataStreams(string file)
+    {
+        var result = new List<(string, string)>();
+
+        try
+        {
+            var fsi = new Alphaleonis.Win32.Filesystem.FileInfo(file);
+
+            foreach (var adsInfo in fsi.EnumerateAlternateDataStreams().Where(t => t.StreamName.Length > 0))
+            {
+                result.Add((adsInfo.FullPath, adsInfo.StreamName));
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Debug(e,"Could not enumerate alternate data streams for {File}. Error: {Message}",file,e.Message);
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<string> EnumerateAllFiles(string dir)
+    {
+        var filters = new Alphaleonis.Win32.Filesystem.DirectoryEnumerationFilters
+        {
+            InclusionFilter = _ => true,
+            RecursionFilter = entryInfo => !entryInfo.IsMountPoint && !entryInfo.IsSymbolicLink,
+            ErrorFilter = (errorCode, errorMessage, pathProcessed) => true
+        };
+
+        var options =
+            Alphaleonis.Win32.Filesystem.DirectoryEnumerationOptions.Files |
+            Alphaleonis.Win32.Filesystem.DirectoryEnumerationOptions.Recursive |
+            Alphaleonis.Win32.Filesystem.DirectoryEnumerationOptions.SkipReparsePoints |
+            Alphaleonis.Win32.Filesystem.DirectoryEnumerationOptions.ContinueOnException |
+            Alphaleonis.Win32.Filesystem.DirectoryEnumerationOptions.BasicSearch;
+
+        return Alphaleonis.Win32.Filesystem.Directory.EnumerateFileSystemEntries(dir, options, filters);
+    }
+
+    private static Stream OpenAdsStream(string streamFullPath)
+    {
+        return Alphaleonis.Win32.Filesystem.File.Open(streamFullPath, FileMode.Open, FileAccess.Read,
+            FileShare.Read, Alphaleonis.Win32.Filesystem.PathFormat.LongFullPath);
+    }
+
+
     public sealed class CsvOutTl
     {
         public string RunTime { get; set; }
