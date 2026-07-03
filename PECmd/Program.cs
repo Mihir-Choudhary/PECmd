@@ -1512,6 +1512,7 @@ internal class Program
 
     private static IEnumerable<string> EnumerateAllFiles(string dir)
     {
+#if !NET9_0_OR_GREATER
         var filters = new Alphaleonis.Win32.Filesystem.DirectoryEnumerationFilters
         {
             InclusionFilter = _ => true,
@@ -1527,6 +1528,17 @@ internal class Program
             Alphaleonis.Win32.Filesystem.DirectoryEnumerationOptions.BasicSearch;
 
         return Alphaleonis.Win32.Filesystem.Directory.EnumerateFileSystemEntries(dir, options, filters);
+#else
+        var options = new EnumerationOptions
+        {
+            IgnoreInaccessible = true,
+            MatchCasing = MatchCasing.CaseInsensitive,
+            RecurseSubdirectories = true,
+            AttributesToSkip = 0
+        };
+
+        return Directory.EnumerateFiles(dir, "*", options);
+#endif
     }
 
     private static Stream OpenAdsStream(string streamFullPath)
