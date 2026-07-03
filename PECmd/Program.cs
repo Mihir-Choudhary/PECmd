@@ -356,7 +356,20 @@ internal class Program
         {
             try
             {
-                var pf = LoadFile(f, q, ActiveDateTimeFormat);
+                IPrefetch pf;
+
+                //When scanning for prefetch hidden in alternate data streams, the carrier file's
+                //primary stream is often empty (e.g. a Prefetch entry created for an ADS-executed
+                //binary). Don't try to parse an empty primary stream as a prefetch - just scan its ADS
+                if (ads && new FileInfo(f).Length == 0)
+                {
+                    Log.Debug("{F} has an empty primary data stream; skipping direct parse and scanning alternate data streams only",f);
+                    pf = null;
+                }
+                else
+                {
+                    pf = LoadFile(f, q, ActiveDateTimeFormat);
+                }
 
                 if (pf != null)
                 {
