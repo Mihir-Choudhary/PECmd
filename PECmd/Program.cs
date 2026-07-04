@@ -1159,6 +1159,14 @@ internal class Program
             csOut.Note = "File contains > 2 volumes! Please inspect output from main program for full details!";
         }
 
+        //Flag prefetch recovered from an alternate data stream (a ':' after the drive letter)
+        if (pf.SourceFilename.Length > 2 && pf.SourceFilename.IndexOf(':', 2) >= 0)
+        {
+            csOut.Note = csOut.Note.IsNullOrEmpty()
+                ? "Prefetch found in ADS"
+                : $"Prefetch found in ADS. {csOut.Note}";
+        }
+
         var sbDirs = new StringBuilder();
         if (pf.VolumeInformation != null)
         {
