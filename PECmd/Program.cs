@@ -1018,11 +1018,44 @@ internal class Program
 
 
 
-    private static CsvOut GetCsvFormat(IPrefetch pf, string dt)
+    //Prefetch parsed from an alternate data stream can come back with unset (MinValue) source
+    //timestamps on .NET Framework, which cannot stat a "host:stream" path (modern .NET resolves it
+    //to the host file and populates them). Recover them from the carrier (host) file, whose
+    //timestamps an alternate data stream inherits. No-op when the timestamps are already populated.
+    private static (DateTimeOffset created, DateTimeOffset modified, DateTimeOffset accessed) GetSourceTimestamps(IPrefetch pf)
     {
         var created = pf.SourceCreatedOn;
         var modified = pf.SourceModifiedOn;
         var accessed = pf.SourceAccessedOn;
+
+        var sourceName = pf.SourceFilename;
+
+        //Already populated, or not an alternate data stream path (a ':' after the drive letter)
+        if (created.Year > 1601 || sourceName.Length <= 2 || sourceName.IndexOf(':', 2) < 0)
+        {
+            return (created, modified, accessed);
+        }
+
+        var carrier = sourceName.Substring(0, sourceName.LastIndexOf(':'));
+
+        try
+        {
+            var fi = new FileInfo(carrier);
+            created = new DateTimeOffset(fi.CreationTimeUtc);
+            modified = new DateTimeOffset(fi.LastWriteTimeUtc);
+            accessed = new DateTimeOffset(fi.LastAccessTimeUtc);
+        }
+        catch (Exception e)
+        {
+            Log.Debug(e,"Could not read carrier file timestamps for {Carrier}. Error: {Message}",carrier,e.Message);
+        }
+
+        return (created, modified, accessed);
+    }
+
+    private static CsvOut GetCsvFormat(IPrefetch pf, string dt)
+    {
+        var (created, modified, accessed) = GetSourceTimestamps(pf);
 
         var volDate = string.Empty;
         var volName = string.Empty;
@@ -1176,9 +1209,7 @@ internal class Program
             }
 
 
-            var created = pf.SourceCreatedOn;
-            var modified = pf.SourceModifiedOn;
-            var accessed = pf.SourceAccessedOn;
+            var (created, modified, accessed) = GetSourceTimestamps(pf);
 
             Log.Information("Created on: {CreatedOn}",created);
             Log.Information("Modified on: {Modified}",modified);
